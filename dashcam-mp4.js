@@ -289,9 +289,9 @@ window.DashcamMP4 = DashcamMP4;
         return value;
     }
 
-    const TESLA_FILENAME_RE = /(\d{4})-(\d{2})-(\d{2})_(\d{2})-(\d{2})-(\d{2})/;
+    const TESLA_FILENAME_RE = /(\d{4})-(\d{2})-(\d{2})[-_](\d{2})-(\d{2})-(\d{2})/;
 
-    /** Parse clip start time from Tesla dashcam filename (YYYY-MM-DD_HH-MM-SS) */
+    /** Parse clip start time from Tesla dashcam filename (YYYY-MM-DD_HH-MM-SS or YYYY-MM-DD-HH-MM-SS) */
     function parseClipStartMs(filename) {
         const match = String(filename).match(TESLA_FILENAME_RE);
         if (!match) return null;
