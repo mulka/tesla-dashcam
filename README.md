@@ -6,9 +6,21 @@ This metadata also appears in the Dashcam Viewer during playback on supported ve
 
 ## Dashcam SEI Explorer (Easiest)
 
-**[Use the online SEI Explorer →](https://teslamotors.github.io/dashcam/sei_explorer.html)**
+**[Use the online SEI Explorer →](https://mulka.github.io/tesla-dashcam/sei_explorer.html)**
 
 Just drag and drop your MP4 file to view the clip and assocaited SEI metadata. Works entirely in your browser - your files never leave your computer.
+
+## GitHub Pages
+
+This repo deploys to GitHub Pages via [`.github/workflows/pages.yml`](.github/workflows/pages.yml) on every push to `master`.
+
+One-time setup (repo admin only):
+
+1. Open **Settings → Pages** for this repository.
+2. Set **Build and deployment → Source** to **GitHub Actions**.
+3. Re-run the latest **Deploy GitHub Pages** workflow (or push a commit to `master`).
+
+The site will be available at `https://mulka.github.io/tesla-dashcam/`.
 
 ## Files
 
