@@ -98,6 +98,14 @@ class DashcamMP4 {
         return this._config;
     }
 
+    /** Cumulative playback offset in ms for a frame index */
+    getFrameOffsetMs(frameIndex) {
+        const { durations } = this.getConfig();
+        let ms = 0;
+        for (let i = 0; i < frameIndex && i < durations.length; i++) ms += durations[i];
+        return ms;
+    }
+
     // -------------------------------------------------------------
     // Frame Parsing (for Video Playback)
     // -------------------------------------------------------------
@@ -281,20 +289,72 @@ window.DashcamMP4 = DashcamMP4;
         return value;
     }
 
+    const TESLA_FILENAME_RE = /(\d{4})-(\d{2})-(\d{2})_(\d{2})-(\d{2})-(\d{2})/;
+
+    /** Parse clip start time from Tesla dashcam filename (YYYY-MM-DD_HH-MM-SS) */
+    function parseClipStartMs(filename) {
+        const match = String(filename).match(TESLA_FILENAME_RE);
+        if (!match) return null;
+        const [, year, month, day, hour, minute, second] = match.map(Number);
+        const date = new Date(year, month - 1, day, hour, minute, second);
+        return Number.isNaN(date.getTime()) ? null : date.getTime();
+    }
+
+    /** Format milliseconds as M:SS.mmm or H:MM:SS.mmm */
+    function formatVideoTime(ms) {
+        const totalSec = ms / 1000;
+        const hours = Math.floor(totalSec / 3600);
+        const minutes = Math.floor((totalSec % 3600) / 60);
+        const seconds = totalSec % 60;
+        const secText = seconds < 10 ? `0${seconds.toFixed(3)}` : seconds.toFixed(3);
+        if (hours > 0) return `${hours}:${String(minutes).padStart(2, '0')}:${secText.padStart(6, '0')}`;
+        return `${minutes}:${secText.padStart(6, '0')}`;
+    }
+
+    /** Format epoch ms as YYYY-MM-DD HH:MM:SS */
+    function formatAbsoluteTime(ms) {
+        const date = new Date(ms);
+        const pad = n => String(n).padStart(2, '0');
+        return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} `
+            + `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+    }
+
+    function csvEscape(text) {
+        const value = String(text);
+        return /[",\n]/.test(value) ? '"' + value.replace(/"/g, '""') + '"' : value;
+    }
+
     /** Build CSV from SEI messages */
-    function buildCsv(messages, fieldInfo) {
-        const headers = fieldInfo.map(f => f.protoName || f.propName);
+    function buildCsv(messages, fieldInfo, options = {}) {
+        const extraHeaders = [];
+        if (options.includeVideoTime) extraHeaders.push('video_time');
+        if (options.includeTimestamp) extraHeaders.push('timestamp');
+
+        const headers = [...extraHeaders, ...fieldInfo.map(f => f.protoName || f.propName)];
         const lines = [headers.join(',')];
 
-        for (const msg of messages) {
+        for (let i = 0; i < messages.length; i++) {
+            const msg = messages[i];
+            const extraValues = [];
+            if (options.includeVideoTime) {
+                const offsetMs = options.getFrameOffsetMs?.(i);
+                extraValues.push(offsetMs == null ? '' : csvEscape(formatVideoTime(offsetMs)));
+            }
+            if (options.includeTimestamp) {
+                const offsetMs = options.getFrameOffsetMs?.(i);
+                const clipStartMs = options.clipStartMs;
+                extraValues.push(offsetMs == null || clipStartMs == null
+                    ? ''
+                    : csvEscape(formatAbsoluteTime(clipStartMs + offsetMs)));
+            }
+
             const values = fieldInfo.map(({ propName, enumMap }) => {
                 let val = msg[propName];
                 if (val === undefined || val === null) return '';
                 if (enumMap?.valuesById) val = enumMap.valuesById[val] ?? val;
-                const text = String(val);
-                return /[",\n]/.test(text) ? '"' + text.replace(/"/g, '""') + '"' : text;
+                return csvEscape(val);
             });
-            lines.push(values.join(','));
+            lines.push([...extraValues, ...values].join(','));
         }
         return lines.join('\n');
     }
@@ -340,6 +400,9 @@ window.DashcamMP4 = DashcamMP4;
         getProtobuf,
         deriveFieldInfo,
         formatValue,
+        parseClipStartMs,
+        formatVideoTime,
+        formatAbsoluteTime,
         buildCsv,
         downloadBlob,
         getFilesFromDataTransfer
