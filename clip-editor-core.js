@@ -192,11 +192,15 @@
 
     function formatTime(seconds, precision = 1) {
         const safe = Math.max(0, Number(seconds) || 0);
-        const hours = Math.floor(safe / 3600);
-        const minutes = Math.floor((safe % 3600) / 60);
-        const wholeSeconds = Math.floor(safe % 60);
+        const factor = 10 ** Math.max(0, precision);
+        const totalUnits = Math.floor(safe * factor + 1e-7);
+        const whole = Math.floor(totalUnits / factor);
+        const hours = Math.floor(whole / 3600);
+        const minutes = Math.floor((whole % 3600) / 60);
+        const wholeSeconds = whole % 60;
+        const fractionUnits = totalUnits % factor;
         const fraction = precision > 0
-            ? `.${String(Math.floor((safe % 1) * (10 ** precision))).padStart(precision, '0')}`
+            ? `.${String(fractionUnits).padStart(precision, '0')}`
             : '';
         const secondsText = `${String(wholeSeconds).padStart(2, '0')}${fraction}`;
         return hours > 0
@@ -204,7 +208,7 @@
             : `${minutes}:${secondsText}`;
     }
 
-    function chooseRecordingFormat(MediaRecorderType) {
+    function supportedRecordingFormats(MediaRecorderType) {
         if (!MediaRecorderType) return null;
         const candidates = [
             { mimeType: 'video/mp4;codecs=avc1.42E01E', extension: 'mp4' },
@@ -216,7 +220,11 @@
         const supports = typeof MediaRecorderType.isTypeSupported === 'function'
             ? candidate => MediaRecorderType.isTypeSupported(candidate)
             : () => true;
-        return candidates.find(candidate => supports(candidate.mimeType)) || null;
+        return candidates.filter(candidate => supports(candidate.mimeType));
+    }
+
+    function chooseRecordingFormat(MediaRecorderType) {
+        return supportedRecordingFormats(MediaRecorderType)?.[0] || null;
     }
 
     return {
@@ -231,6 +239,7 @@
         activeCameraAt,
         buildSegments,
         formatTime,
+        supportedRecordingFormats,
         chooseRecordingFormat
     };
 });

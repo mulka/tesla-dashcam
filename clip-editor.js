@@ -78,7 +78,9 @@
     let playbackStartedAt = 0;
     let playbackStartedFrom = 0;
     let lastPlaybackSync = 0;
+    let playbackGeneration = 0;
     let loadGeneration = 0;
+    let fileSelectionGeneration = 0;
     let seekGeneration = 0;
     let exporting = false;
     let cancelRequested = false;
@@ -92,18 +94,20 @@
         chooseFolderBtn.addEventListener('click', () => folderInput.click());
         replaceBtn.addEventListener('click', () => fileInput.click());
         fileInput.addEventListener('change', event => {
-            void receiveFiles(Array.from(event.target.files || []));
+            const generation = ++fileSelectionGeneration;
+            void receiveFiles(Array.from(event.target.files || []), generation);
             event.target.value = '';
         });
         folderInput.addEventListener('change', event => {
-            void receiveFiles(Array.from(event.target.files || []));
+            const generation = ++fileSelectionGeneration;
+            void receiveFiles(Array.from(event.target.files || []), generation);
             event.target.value = '';
         });
 
         window.addEventListener('dragover', event => {
             if (!hasFileDrag(event)) return;
             event.preventDefault();
-            dropZone.classList.add('dragover');
+            if (!dropZone.hidden) dropZone.classList.add('dragover');
         });
         window.addEventListener('dragleave', event => {
             if (!event.relatedTarget) dropZone.classList.remove('dragover');
@@ -112,7 +116,15 @@
             if (!hasFileDrag(event)) return;
             event.preventDefault();
             dropZone.classList.remove('dragover');
-            void filesFromDataTransfer(event.dataTransfer).then(receiveFiles);
+            if (dropZone.hidden) {
+                syncNote.textContent = 'Use “Replace videos” to start over with dropped files.';
+                syncNote.classList.add('warning');
+                return;
+            }
+            const generation = ++fileSelectionGeneration;
+            void filesFromDataTransfer(event.dataTransfer).then(files => {
+                if (generation === fileSelectionGeneration) void receiveFiles(files, generation);
+            });
         });
 
         recordingSelect.addEventListener('change', () => {
@@ -197,31 +209,51 @@
         await Promise.all(children.map(child => collectEntryFiles(child, files)));
     }
 
-    async function receiveFiles(fileList) {
-        if (exporting) return;
+    async function receiveFiles(fileList, generation) {
+        if (exporting || generation !== fileSelectionGeneration) return;
         const videoFiles = Array.from(fileList || []).filter(file => (
             file.type.startsWith('video/') || VIDEO_FILE_RE.test(file.name)
         ));
         if (videoFiles.length < 2) {
-            showDropMessage('Choose at least two camera video files from the same recording.', true);
+            showSourceSelectionError('Choose at least two camera video files from the same recording.');
             return;
         }
 
+        const previousFileState = { allFiles, recordingGroups, selectedGroupKey };
+        const hadProject = sources.length >= 2;
         pausePreview();
-        showDropMessage(`Found ${videoFiles.length} videos. Reading camera details…`);
-        dropZone.hidden = false;
-        editor.hidden = true;
+        if (hadProject) {
+            syncNote.textContent = `Found ${videoFiles.length} videos. Reading camera details…`;
+            syncNote.classList.remove('warning');
+        } else {
+            showDropMessage(`Found ${videoFiles.length} videos. Reading camera details…`);
+            dropZone.hidden = false;
+            editor.hidden = true;
+        }
         allFiles = videoFiles;
         recordingGroups = buildRecordingGroups(videoFiles);
         populateRecordingSelector();
 
         const preferred = recordingGroups
-            .filter(group => group.key !== '__all__')
             .filter(group => group.files.length >= 2)
-            .sort((a, b) => b.files.length - a.files.length || a.label.localeCompare(b.label))[0]
-            || recordingGroups.find(group => group.key === '__all__')
-            || recordingGroups[0];
-        await loadRecordingGroup(preferred.key);
+            .sort((a, b) => b.files.length - a.files.length || a.label.localeCompare(b.label))[0];
+        if (!preferred) {
+            allFiles = previousFileState.allFiles;
+            recordingGroups = previousFileState.recordingGroups;
+            selectedGroupKey = previousFileState.selectedGroupKey;
+            populateRecordingSelector();
+            showSourceSelectionError('No recording contains two matching camera files. Select camera videos with the same Tesla timestamp.');
+            return;
+        }
+
+        const loaded = await loadRecordingGroup(preferred.key);
+        if (loaded === false && hadProject) {
+            allFiles = previousFileState.allFiles;
+            recordingGroups = previousFileState.recordingGroups;
+            selectedGroupKey = previousFileState.selectedGroupKey;
+            populateRecordingSelector();
+            recordingSelect.value = selectedGroupKey || '';
+        }
     }
 
     function buildRecordingGroups(files) {
@@ -253,14 +285,6 @@
             }))
             .sort((a, b) => a.key.localeCompare(b.key));
 
-        if (groups.length > 1) {
-            groups.push({
-                key: '__all__',
-                label: `All selected files (${files.length})`,
-                files,
-                forceTogether: true
-            });
-        }
         return groups;
     }
 
@@ -283,12 +307,12 @@
 
     async function loadRecordingGroup(groupKey) {
         const group = recordingGroups.find(candidate => candidate.key === groupKey);
-        if (!group) return;
+        if (!group || group.files.length < 2) return false;
+        const previousSources = sources.slice();
+        const previousGroupKey = selectedGroupKey;
         const generation = ++loadGeneration;
-        selectedGroupKey = group.key;
         recordingSelect.value = group.key;
         pausePreview();
-        cleanupSources();
         showDropMessage(`Loading ${group.files.length} camera videos…`);
         syncNote.textContent = 'Loading camera videos…';
         syncNote.classList.remove('warning');
@@ -298,7 +322,7 @@
             results.forEach(result => {
                 if (result.status === 'fulfilled') disposeSource(result.value);
             });
-            return;
+            return null;
         }
 
         const loaded = results.filter(result => result.status === 'fulfilled').map(result => result.value);
@@ -306,20 +330,23 @@
         if (loaded.length < 2) {
             loaded.forEach(disposeSource);
             const detail = failed[0]?.reason?.message;
-            showDropMessage(detail || 'At least two of these files could not be played by this browser.', true);
-            return;
+            reportLoadFailure(detail || 'At least two of these files could not be played by this browser.', previousSources, previousGroupKey);
+            return false;
         }
 
         loaded.sort(compareSources);
         makeSourcesUnique(loaded);
-        alignment = Core.computeAlignment(loaded);
-        if (alignment.overlapDuration < 1) {
+        const candidateAlignment = Core.computeAlignment(loaded);
+        if (candidateAlignment.overlapDuration < 1) {
             loaded.forEach(disposeSource);
-            showDropMessage(alignment.warning || 'The selected videos do not share enough time to make a clip.', true);
-            return;
+            reportLoadFailure(candidateAlignment.warning || 'The selected videos do not share enough time to make a clip.', previousSources, previousGroupKey);
+            return false;
         }
 
+        previousSources.forEach(disposeSource);
         sources = loaded;
+        alignment = candidateAlignment;
+        selectedGroupKey = group.key;
         sources.forEach((source, index) => {
             source.alignedOffset = alignment.offsets[index];
             source.color = CAMERA_COLORS[source.cameraKey] || FALLBACK_COLORS[index % FALLBACK_COLORS.length];
@@ -340,6 +367,24 @@
         dropZone.hidden = true;
         editor.hidden = false;
         await seekAll(0);
+        return true;
+    }
+
+    function reportLoadFailure(message, previousSources, previousGroupKey) {
+        if (previousSources.length >= 2) {
+            sources = previousSources;
+            selectedGroupKey = previousGroupKey;
+            recordingSelect.value = previousGroupKey || '';
+            dropZone.hidden = true;
+            editor.hidden = false;
+            syncNote.textContent = message;
+            syncNote.classList.add('warning');
+            void seekAll(currentTime);
+        } else {
+            showDropMessage(message, true);
+            dropZone.hidden = false;
+            editor.hidden = true;
+        }
     }
 
     function loadVideoSource(file, index, forceTogether) {
@@ -353,9 +398,15 @@
             video.disablePictureInPicture = true;
             video.src = objectUrl;
             sourceVideos.appendChild(video);
+            const timeout = setTimeout(() => {
+                cleanupListeners();
+                disposeSource({ video, objectUrl });
+                reject(new Error(`${file.name} took too long to decode.`));
+            }, 12000);
 
             const cleanupListeners = () => {
-                video.removeEventListener('loadedmetadata', onLoaded);
+                clearTimeout(timeout);
+                video.removeEventListener('loadeddata', onLoaded);
                 video.removeEventListener('error', onError);
             };
             const onLoaded = () => {
@@ -385,7 +436,7 @@
                 reject(new Error(`${file.name} is not playable in this browser.`));
             };
 
-            video.addEventListener('loadedmetadata', onLoaded);
+            video.addEventListener('loadeddata', onLoaded);
             video.addEventListener('error', onError);
             video.load();
         });
@@ -520,7 +571,7 @@
         cameraTimeline.appendChild(timelinePlayhead);
     }
 
-    function renderSwitchList() {
+    function renderSwitchList(focusIndex = -1, focusControl = '') {
         switchList.replaceChildren();
         cuts.forEach((cut, index) => {
             const row = document.createElement('div');
@@ -539,8 +590,9 @@
                 updated[index].time = Core.clamp(Number(time.value), 0, Math.max(0, clipLength - 0.01));
                 cuts = Core.normalizeCuts(updated, clipLength, sourceIds(), cuts[0].cameraId);
                 renderTimeline();
-                renderSwitchList();
+                renderSwitchList(index, 'time');
                 updatePlayheadUi();
+                if (!playing) void seekAll(currentTime);
             });
 
             const camera = document.createElement('select');
@@ -558,7 +610,7 @@
                 updated[index].cameraId = camera.value;
                 cuts = Core.normalizeCuts(updated, clipLength, sourceIds(), updated[0].cameraId);
                 renderTimeline();
-                renderSwitchList();
+                renderSwitchList(index, 'camera');
                 updatePlayheadUi();
                 if (!playing) void seekAll(currentTime);
             });
@@ -574,13 +626,20 @@
                 cuts.splice(index, 1);
                 cuts = Core.normalizeCuts(cuts, clipLength, sourceIds(), cuts[0]?.cameraId || sources[0].id);
                 renderTimeline();
-                renderSwitchList();
+                renderSwitchList(Math.min(index, cuts.length - 1), 'camera');
                 updatePlayheadUi();
+                if (!playing) void seekAll(currentTime);
             });
 
             row.append(time, camera, remove);
             switchList.appendChild(row);
         });
+        if (focusIndex >= 0 && focusControl) {
+            requestAnimationFrame(() => {
+                const row = switchList.children[focusIndex];
+                row?.querySelector(focusControl === 'time' ? 'input' : 'select')?.focus();
+            });
+        }
     }
 
     function configureClipControls() {
@@ -690,19 +749,11 @@
 
     async function startPreview() {
         if (!sources.length || playing || startingPlayback || exporting) return;
+        const generation = ++playbackGeneration;
         startingPlayback = true;
         if (currentTime >= clipLength - 0.01) currentTime = 0;
         await seekAll(currentTime);
-        if (exporting || !startingPlayback) {
-            startingPlayback = false;
-            return;
-        }
-
-        try {
-            await Promise.all(sources.map(source => source.video.play()));
-        } catch (error) {
-            pauseAllVideos();
-            setExportMessage(`Preview could not start: ${error.message}`, 'error');
+        if (exporting || !startingPlayback || generation !== playbackGeneration) {
             startingPlayback = false;
             return;
         }
@@ -712,6 +763,11 @@
         playbackStartedFrom = currentTime;
         playbackStartedAt = performance.now();
         lastPlaybackSync = playbackStartedAt;
+        Promise.all(sources.map(source => source.video.play())).catch(error => {
+            if (generation !== playbackGeneration) return;
+            pausePreview();
+            setExportMessage(`Preview could not start: ${error.message}`, 'error');
+        });
         playBtn.innerHTML = PAUSE_ICON;
         playBtn.setAttribute('aria-label', 'Pause preview');
         previewAnimationFrame = requestAnimationFrame(previewTick);
@@ -735,6 +791,7 @@
     }
 
     function pausePreview() {
+        playbackGeneration++;
         startingPlayback = false;
         if (previewAnimationFrame) cancelAnimationFrame(previewAnimationFrame);
         previewAnimationFrame = 0;
@@ -751,7 +808,7 @@
     function syncPlayingVideos(projectTime) {
         sources.forEach(source => {
             const target = videoTimeFor(source, projectTime);
-            if (Math.abs(source.video.currentTime - target) > 0.18) source.video.currentTime = target;
+            if (Math.abs(source.video.currentTime - target) > 0.08) source.video.currentTime = target;
         });
     }
 
@@ -822,7 +879,7 @@
 
     async function exportClip() {
         if (!sources.length || exporting) return;
-        const format = Core.chooseRecordingFormat(window.MediaRecorder);
+        let format = Core.chooseRecordingFormat(window.MediaRecorder);
         if (!format || typeof canvas.captureStream !== 'function') {
             setExportMessage('Video export is not supported by this browser.', 'error');
             return;
@@ -843,27 +900,32 @@
             drawAt(0);
             stream = canvas.captureStream(30);
             const bitsPerSecond = Math.max(4_000_000, Math.min(12_000_000, canvas.width * canvas.height * 5));
-            const recorder = new MediaRecorder(stream, {
-                mimeType: format.mimeType,
-                videoBitsPerSecond: bitsPerSecond
-            });
+            const recorderSetup = createMediaRecorder(stream, bitsPerSecond);
+            const recorder = recorderSetup.recorder;
+            format = recorderSetup.format;
             activeRecorder = recorder;
             const chunks = [];
+            let recorderFailure = null;
+            let failRecording = null;
             recorder.addEventListener('dataavailable', event => {
                 if (event.data.size) chunks.push(event.data);
             });
-            const stopped = new Promise((resolve, reject) => {
+            const stopped = new Promise(resolve => {
                 recorder.addEventListener('stop', resolve, { once: true });
-                recorder.addEventListener('error', event => reject(event.error || new Error('Video recorder failed.')), { once: true });
+                recorder.addEventListener('error', resolve, { once: true });
+            });
+            recorder.addEventListener('error', event => {
+                recorderFailure = event.error || new Error('Video recorder failed.');
+                failRecording?.(recorderFailure);
             });
 
-            await Promise.all(sources.map(source => source.video.play()));
             recorder.start(250);
             const startedAt = performance.now();
             let lastSync = startedAt;
             setExportMessage(`Recording ${Core.formatTime(clipLength)} in real time…`);
 
-            await new Promise(resolve => {
+            const recordingLoop = new Promise((resolve, reject) => {
+                failRecording = reject;
                 const tick = now => {
                     const elapsed = Math.min(clipLength, (now - startedAt) / 1000);
                     currentTime = elapsed;
@@ -883,12 +945,16 @@
                 };
                 exportAnimationFrame = requestAnimationFrame(tick);
             });
+            Promise.all(sources.map(source => source.video.play())).catch(error => failRecording?.(error));
+            await recordingLoop;
+            failRecording = null;
 
             if (exportAnimationFrame) cancelAnimationFrame(exportAnimationFrame);
             exportAnimationFrame = 0;
             pauseAllVideos();
             if (recorder.state !== 'inactive') recorder.stop();
             await stopped;
+            if (recorderFailure) throw recorderFailure;
 
             if (cancelRequested) {
                 setExportMessage('Export cancelled.');
@@ -913,6 +979,7 @@
         } finally {
             if (exportAnimationFrame) cancelAnimationFrame(exportAnimationFrame);
             exportAnimationFrame = 0;
+            pauseAllVideos();
             stream?.getTracks().forEach(track => track.stop());
             activeRecorder = null;
             exporting = false;
@@ -924,7 +991,25 @@
         }
     }
 
+    function createMediaRecorder(stream, bitsPerSecond) {
+        const formats = Core.supportedRecordingFormats(window.MediaRecorder) || [];
+        let lastError = null;
+        for (const format of formats) {
+            for (const includeBitrate of [true, false]) {
+                try {
+                    const options = { mimeType: format.mimeType };
+                    if (includeBitrate) options.videoBitsPerSecond = bitsPerSecond;
+                    return { recorder: new MediaRecorder(stream, options), format };
+                } catch (error) {
+                    lastError = error;
+                }
+            }
+        }
+        throw lastError || new Error('No supported recording format is available.');
+    }
+
     function setExportControls(isExporting) {
+        const restoreExportFocus = !isExporting && document.activeElement === cancelExportBtn;
         exportBtn.hidden = isExporting;
         cancelExportBtn.hidden = !isExporting;
         playBtn.disabled = isExporting;
@@ -937,6 +1022,10 @@
         });
         configureClipControls();
         renderSwitchList();
+        requestAnimationFrame(() => {
+            if (isExporting) cancelExportBtn.focus();
+            else if (restoreExportFocus) exportBtn.focus();
+        });
     }
 
     function updateExportButton() {
@@ -971,6 +1060,15 @@
     function showDropMessage(message, isError = false) {
         dropStatus.textContent = message;
         dropStatus.style.color = isError ? 'var(--accent)' : '';
+    }
+
+    function showSourceSelectionError(message) {
+        if (sources.length >= 2 && !editor.hidden) {
+            syncNote.textContent = message;
+            syncNote.classList.add('warning');
+        } else {
+            showDropMessage(message, true);
+        }
     }
 
     function sourceIds() {

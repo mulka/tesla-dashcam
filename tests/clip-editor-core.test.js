@@ -95,6 +95,8 @@ test('adds a switch at the playhead and builds contiguous segments', () => {
 
 test('formats clip times and chooses the first supported recording format', () => {
     assert.equal(Core.formatTime(65.98), '1:05.9');
+    assert.equal(Core.formatTime(10.1), '0:10.1');
+    assert.equal(Core.formatTime(65.3), '1:05.3');
     assert.equal(Core.formatTime(3661.25, 0), '1:01:01');
 
     const recorder = {
@@ -104,5 +106,9 @@ test('formats clip times and chooses the first supported recording format', () =
         mimeType: 'video/webm;codecs=vp8',
         extension: 'webm'
     });
+    assert.deepEqual(Core.supportedRecordingFormats(recorder), [{
+        mimeType: 'video/webm;codecs=vp8',
+        extension: 'webm'
+    }]);
     assert.equal(Core.chooseRecordingFormat(null), null);
 });

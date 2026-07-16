@@ -5,6 +5,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Tesla Multi-camera Clip Editor</title>
+    <link rel="icon" href="data:,">
     <style>
         :root {
             color-scheme: light dark;
@@ -17,6 +18,7 @@
             --accent: #d71920;
             --accent-hover: #b81218;
             --accent-soft: #fdebed;
+            --on-accent: #ffffff;
             --focus: #1677ff;
             --success: #147a42;
             --warning: #8a5700;
@@ -34,6 +36,7 @@
                 --accent: #f0444a;
                 --accent-hover: #ff5b61;
                 --accent-soft: #3d2023;
+                --on-accent: #111214;
                 --focus: #62a6ff;
                 --success: #62cf91;
                 --warning: #f5bc5c;
@@ -70,7 +73,7 @@
         input:focus-visible,
         select:focus-visible,
         [tabindex]:focus-visible {
-            outline: 3px solid color-mix(in srgb, var(--focus) 60%, transparent);
+            outline: 3px solid var(--focus);
             outline-offset: 2px;
         }
 
@@ -216,7 +219,7 @@
 
         .button-primary {
             background: var(--accent);
-            color: #fff;
+            color: var(--on-accent);
         }
 
         .button-primary:hover:not(:disabled) {
@@ -343,7 +346,7 @@
             border: 0;
             border-radius: 50%;
             background: var(--accent);
-            color: #fff;
+            color: var(--on-accent);
         }
 
         .play-button:hover:not(:disabled) {
@@ -926,9 +929,10 @@
         </main>
     </div>
 
-    <input class="file-input" id="fileInput" type="file" accept="video/mp4,video/webm,video/quicktime" multiple>
+    <input class="file-input" id="fileInput" type="file" accept="video/mp4,video/webm,video/quicktime" multiple
+        tabindex="-1" aria-label="Choose camera video files">
     <input class="file-input" id="folderInput" type="file" accept="video/mp4,video/webm,video/quicktime" webkitdirectory
-        directory multiple>
+        directory multiple tabindex="-1" aria-label="Choose a Tesla event folder">
     <div class="source-videos" id="sourceVideos" aria-hidden="true"></div>
 
     <script src="clip-editor-core.js"></script>
