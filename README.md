@@ -4,6 +4,14 @@ This repo contains tools for viewing Tesla Dashcam videos and extracting their a
 
 This metadata also appears in the Dashcam Viewer during playback on supported vehicle displays and the Tesla App.
 
+## Multi-camera Clip Editor
+
+**[Use the online Multi-camera Clip Editor →](https://mulka.github.io/tesla-dashcam/clip_editor.html)**
+
+Select the synchronized camera files from one Tesla recording, choose a clip range up to 30 seconds, and add camera
+switches at any point on the timeline. Preview and export the edited clip entirely in your browser; source videos are
+never uploaded. The exported container is MP4 when the browser supports it, with WebM used as a fallback.
+
 ## Dashcam SEI Explorer (Easiest)
 
 **[Use the online SEI Explorer →](https://mulka.github.io/tesla-dashcam/sei_explorer.html)**
@@ -24,6 +32,9 @@ The site will be available at `https://mulka.github.io/tesla-dashcam/`.
 
 ## Files
 
+* [`clip_editor.html`](clip_editor.html)
+    * Browser-based multi-camera clip editor. Aligns Tesla camera files by their filename timestamps and exports a
+      locally rendered clip with user-defined camera switches.
 * [`sei_explorer.html`](sei_explorer.html)
     * Web-based video player that displays SEI metadata alongside video playback. Uses [`dashcam-mp4.js`](dashcam-mp4.js) for MP4 parsing and SEI metadata extraction.
 * [`sei_extractor.py`](sei_extractor.py)
