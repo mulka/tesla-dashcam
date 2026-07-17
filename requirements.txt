@@ -1,0 +1,2 @@
+# Python runtime dependency for the generated dashcam_pb2 module.
+protobuf==7.35.1

@@ -1,0 +1,3 @@
+{
+  "install": "bash scripts/setup-dev.sh && bash scripts/configure-dataspheres.sh"
+}
