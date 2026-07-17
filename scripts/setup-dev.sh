@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT="$(git rev-parse --show-toplevel)"
 VENV="$ROOT/.venv"
+VIRTUALENV_BOOTSTRAP="$ROOT/.cache/virtualenv"
 SKILLS_DIR="$ROOT/.cursor/skills/vendor/ari-dai-skills"
 
 # shellcheck source=dai-skills.env
@@ -27,8 +28,27 @@ fi
 
 python3 -c 'import sys; assert sys.version_info >= (3, 9), "Python 3.9 or newer is required"'
 
-if [ ! -x "$VENV/bin/python" ]; then
-  python3 -m venv "$VENV"
+venv_has_pip() {
+  [ -x "$VENV/bin/python" ] &&
+    "$VENV/bin/python" -m pip --version >/dev/null 2>&1
+}
+
+if ! venv_has_pip; then
+  if ! python3 -m venv "$VENV" >/dev/null 2>&1 || ! venv_has_pip; then
+    if ! python3 -m pip --version >/dev/null 2>&1; then
+      echo "Python has neither ensurepip nor pip; install python3-venv or python3-pip." >&2
+      exit 1
+    fi
+    echo "stdlib venv support is unavailable; using the rootless virtualenv fallback."
+    mkdir -p "$VIRTUALENV_BOOTSTRAP"
+    python3 -m pip install \
+      --disable-pip-version-check \
+      --upgrade \
+      --target "$VIRTUALENV_BOOTSTRAP" \
+      --requirement "$ROOT/requirements-bootstrap.txt"
+    PYTHONPATH="$VIRTUALENV_BOOTSTRAP" \
+      python3 -m virtualenv --clear "$VENV"
+  fi
 fi
 
 "$VENV/bin/python" -m pip install \
