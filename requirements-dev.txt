@@ -1,0 +1,4 @@
+-r requirements.txt
+
+# Supplies a version-matched protoc without requiring a system package.
+grpcio-tools==1.82.1

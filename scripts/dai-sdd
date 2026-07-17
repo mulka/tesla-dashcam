@@ -1,0 +1,137 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(git rev-parse --show-toplevel)"
+SKILLS_DIR="$ROOT/.cursor/skills/vendor/ari-dai-skills"
+CONDUCTOR="$SKILLS_DIR/skills/sdd-conductor/sdd-conductor.mjs"
+LOOP="$SKILLS_DIR/skills/all-dai-sdd/loop.mjs"
+
+# shellcheck source=dai-skills.env
+source "$ROOT/scripts/dai-skills.env"
+
+usage() {
+  cat <<'EOF'
+Usage: scripts/dai-sdd <command> [arguments]
+
+Commands:
+  doctor                 Check local tooling and Dataspheres readiness
+  init                   Bind tasks.yaml to an existing Dataspheres board
+  conductor <args...>    Run sdd-conductor.mjs
+  loop <args...>         Run all-dai-sdd/loop.mjs
+  protocol               Print the installed protocol locations
+EOF
+}
+
+require_skills() {
+  if [ ! -f "$CONDUCTOR" ] || [ ! -f "$LOOP" ]; then
+    echo "ari-dai-skills is not installed. Run: make setup" >&2
+    exit 1
+  fi
+}
+
+doctor() {
+  local failures=0
+
+  if [ -x "$ROOT/.venv/bin/python" ] &&
+    "$ROOT/.venv/bin/python" -c 'import dashcam_pb2, google.protobuf' >/dev/null 2>&1; then
+    echo "Dashcam Python environment: ready"
+  else
+    echo "Dashcam Python environment: missing (run: make setup)"
+    failures=$((failures + 1))
+  fi
+
+  if command -v node >/dev/null 2>&1 &&
+    [ "$(node --version | tr -d 'v' | cut -d. -f1)" -ge 18 ]; then
+    echo "Node.js runtime: $(node --version)"
+  else
+    echo "Node.js runtime: missing or older than 18"
+    failures=$((failures + 1))
+  fi
+
+  if [ -d "$SKILLS_DIR/.git" ]; then
+    local actual_commit
+    actual_commit="$(git -C "$SKILLS_DIR" rev-parse HEAD)"
+    if [ "$actual_commit" = "$DAI_SKILLS_COMMIT" ]; then
+      echo "ari-dai-skills: pinned revision installed"
+    else
+      echo "ari-dai-skills: wrong revision (run: make setup)"
+      failures=$((failures + 1))
+    fi
+  else
+    echo "ari-dai-skills: missing (run: make setup)"
+    failures=$((failures + 1))
+  fi
+
+  if python3 - "$HOME/.dataspheres.env" "$ROOT/.env" <<'PY'
+from pathlib import Path
+import sys
+
+values = {}
+for filename in sys.argv[1:]:
+    path = Path(filename)
+    if not path.exists():
+        continue
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        name, value = line.split("=", 1)
+        values[name.strip()] = value.strip().strip("'\"")
+
+key = values.get("DATASPHERES_API_KEY", "")
+raise SystemExit(0 if key.startswith("dsk_") and "replace" not in key and "your_key" not in key else 1)
+PY
+  then
+    echo "Dataspheres credentials: configured"
+  else
+    echo "Dataspheres credentials: pending (local dashcam tools remain usable)"
+  fi
+
+  if [ -f "$ROOT/tasks.yaml" ]; then
+    echo "SDD project spec: tasks.yaml present"
+  else
+    echo "SDD project spec: not published yet (invoke /all-dai-sdd after configuring credentials)"
+  fi
+
+  return "$failures"
+}
+
+if [ "$#" -eq 0 ]; then
+  usage
+  exit 1
+fi
+
+COMMAND="$1"
+shift
+
+case "$COMMAND" in
+doctor)
+  doctor
+  ;;
+init)
+  require_skills
+  exec node "$CONDUCTOR" init "$@"
+  ;;
+conductor)
+  require_skills
+  exec node "$CONDUCTOR" "$@"
+  ;;
+loop)
+  require_skills
+  exec node "$LOOP" "$@"
+  ;;
+protocol)
+  require_skills
+  echo "$SKILLS_DIR/skills/all-dai-sdd/SKILL.md"
+  echo "$SKILLS_DIR/skills/all-dai-sdd/PROTOCOL.md"
+  echo "https://dataspheres.ai/pages/dataspheres-ai/spec-driven-development"
+  ;;
+help | --help | -h)
+  usage
+  ;;
+*)
+  echo "Unknown command: $COMMAND" >&2
+  usage >&2
+  exit 1
+  ;;
+esac

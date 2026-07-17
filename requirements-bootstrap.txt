@@ -1,0 +1,2 @@
+# Rootless fallback for Python installations that omit the stdlib ensurepip data.
+virtualenv==21.6.1
